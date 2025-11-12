@@ -1,12 +1,18 @@
 import {Component, OnInit, viewChild} from '@angular/core';
 import {HttpClient} from '@angular/common/http';
 import {AgGridAngular} from 'ag-grid-angular';
-import {ColDef, ICellRendererParams} from 'ag-grid-community';
+import {ColDef, ICellRendererParams, ValueFormatterParams, ValueGetterParams} from 'ag-grid-community';
 import {Game} from './game';
+import Papa from 'papaparse';
 
 export function LinkRenderer(params: ICellRendererParams) {
   return `<a href="${params.value}" target="_blank">Link</a>`;
 }
+
+let floatFormatter = (p: ValueFormatterParams<Game>) => Number(p.value).toFixed(2);
+
+let getVolume = (i: ValueGetterParams<Game>) => Number(i.data?.weight) * Number(i.data?.depth) * Number(i.data?.length);
+
 
 @Component({
   selector: 'app-csv-grid',
@@ -17,15 +23,53 @@ export function LinkRenderer(params: ICellRendererParams) {
   styleUrls: ['./csv-grid.component.scss']
 })
 export class CsvGridComponent implements OnInit {
+  getWeightScore = (i: ValueGetterParams<Game>) => Number(i.data?.weight) / this.maxWeight;
   public columnDefs: ColDef<Game>[] = [
     {headerName: "id", field: "id"},
     {headerName: "name", field: "name"},
     {headerName: "rank", field: "rank"},
-    {headerName: "rating", field: "average"},
-    {headerName: "complexity", field: "complexity"},
-    {headerName: "size (WxLxD in)", valueGetter: i => `${Number(i.data?.width).toFixed(2)}x${Number(i.data?.length)?.toFixed(2)}x${Number(i.data?.depth)?.toFixed(2)}`},
-    {headerName: "weight (lbs)", valueGetter: i => `${Number(i.data?.weight).toFixed(2)}`},
-    {headerName: "bgg", valueGetter: i => `https://boardgamegeek.com/boardgame/${i.data?.id}`, cellRenderer: LinkRenderer}
+    {headerName: "rating", field: "average", valueFormatter: floatFormatter},
+    {headerName: "complexity", field: "complexity", valueFormatter: floatFormatter},
+    {
+      headerName: "size (WxLxD in)",
+      valueGetter: i => `${Number(i.data?.width).toFixed(2)}x${Number(i.data?.length)?.toFixed(2)}x${Number(i.data?.depth)?.toFixed(2)}`
+    },
+    {headerName: "weight (lbs)", field: "weight", valueFormatter: floatFormatter},
+    {
+      headerName: "bgg",
+      valueGetter: i => `https://boardgamegeek.com/boardgame/${i.data?.id}`,
+      cellRenderer: LinkRenderer
+    },
+    {
+      headerName: "volume",
+      valueGetter: getVolume,
+      valueFormatter: floatFormatter
+    },
+    {
+      headerName: "weightPerInch",
+      valueGetter: i => getVolume(i) / Number(i.data?.weight),
+      valueFormatter: floatFormatter
+    },
+    {
+      headerName: "weightPerComplexity",
+      valueGetter: i => Number(i.data?.complexity) / Number(i.data?.weight),
+      valueFormatter: floatFormatter
+    },
+    {
+      headerName: "weightScore",
+      valueGetter: i => this.getWeightScore(i) * 5,
+      valueFormatter: floatFormatter
+    },
+    {
+      headerName: "weightScorePerComplexity",
+      valueGetter: i => Number(i.data?.complexity) / this.getWeightScore(i),
+      valueFormatter: floatFormatter
+    },
+    {
+      headerName: "weightScorePerRating",
+      valueGetter: i => Number(i.data?.average) / this.getWeightScore(i),
+      valueFormatter: floatFormatter
+    }
   ];
   public rowData: any[] = [];
   public defaultColDef = {
@@ -34,10 +78,12 @@ export class CsvGridComponent implements OnInit {
     resizable: true,
     floatingFilter: true
   };
+  maxWeight = 1;
 
   grid = viewChild(AgGridAngular);
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient) {
+  }
 
   ngOnInit(): void {
     this.loadCsvFromAssets();
@@ -45,17 +91,17 @@ export class CsvGridComponent implements OnInit {
   }
 
   loadCsvFromAssets(): void {
-    this.http.get('merged.csv', { responseType: 'text' })
+    this.http.get('merged.csv', {responseType: 'text'})
       .subscribe(csv => {
-        const [headerLine, ...lines] = csv.trim().split('\n');
-        const headers = headerLine.split(',').map(v => v.replace("\r", ""));
-
-        this.rowData = lines.map(line => {
-          const values = line.split(',').map(v => v.replace("\r", ""));
-          return Object.fromEntries(headers.map((h, i) => [h, values[i]]));
+        const parsed = Papa.parse(csv, {
+          header: true,
+          skipEmptyLines: true,
+          dynamicTyping: true, // transforms numbers
+          quoteChar: '"',
         });
-        // fit columns to screen
-        this.grid()?.api.sizeColumnsToFit();
+
+        this.rowData = parsed.data;
+        this.maxWeight = Math.max(...this.rowData.map(r => Number(r.weight) || 0));
 
         console.log('rowData:', this.rowData);
       });
